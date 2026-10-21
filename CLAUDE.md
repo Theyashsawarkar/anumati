@@ -19,3 +19,4 @@ called vayu-elevate until v1.1.0 (`/usr/local/bin/vayu-elevate` is a link).
   `python -m unittest discover -s tests` and `shellcheck install.sh` must pass.
 - Test with harmless requests only (`--cmd id`), through the real window; the
   user approves each.
+- The website (docs/, GitHub Pages) is generated: after changing README.md, CHANGELOG.md or docs/adr/, run `python3 scripts/build-site.py` and commit docs/ (CI checks it). A significant design decision gets a new ADR in docs/adr/ (next number; supersede, never rewrite).

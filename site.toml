@@ -1,0 +1,8 @@
+# The project website (docs/, GitHub Pages): built by scripts/build-site.py
+name = "anumati"
+sanskrit = "अनुमति"
+meaning = "permission"
+tagline = "Let AI agents ask for root commands, and run only the ones you approve."
+color = "green"
+kind = "for AI agents"
+logo = "assets/logo.svg"

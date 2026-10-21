@@ -44,7 +44,7 @@ import uuid
 
 DIALOG = "/usr/local/lib/anumati/dialog.py"
 LIB = "/usr/local/lib/anumati"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 MAX_COMMANDS, MAX_CMD, MAX_WHY, MAX_REASON, MAX_REQUESTER = 50, 8000, 500, 2000, 80
 # Characters that can make displayed text differ from what runs: C0/C1

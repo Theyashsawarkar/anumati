@@ -2,6 +2,12 @@
 
 Newest first. Releases are tags (`vX.Y.Z`) with `VERSION` in `bin/anumati`.
 
+## v1.1.1 -- 2026-10-21
+
+- A website (GitHub Pages, https://theyashsawarkar.github.io/anumati/): the README as a home page, the
+  changelog, and architecture decision records (`docs/adr/`), built from these files by
+  `scripts/build-site.py`; CI checks the site is up to date.
+
 ## v1.1.0 -- 2026-10-21
 
 - Renamed from `vayu-elevate` to **anumati** (अनुमति, "permission") and

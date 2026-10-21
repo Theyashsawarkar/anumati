@@ -33,3 +33,5 @@ jobs:
           PY
       - name: Request validation tests
         run: python -m unittest discover -s tests -v
+      - name: Website is up to date
+        run: python3 scripts/build-site.py --check
