@@ -1,0 +1,316 @@
+#!/usr/bin/python3 -I
+"""anumati (अनुमति, "permission"): run commands as root with the user's approval. For AI agents.
+
+Instead of asking the user to copy sudo commands into a terminal, an agent
+sends the commands and the reason for each. An approval window shows them on
+the desktop; the user ticks the ones to allow and types their password once;
+the ticked commands run as root; the agent gets every command's output and
+exit code back as JSON. Nothing runs without the user's password.
+
+Usage (any agent that can run a shell command):
+
+    anumati <<'EOF'
+    {"requester": "Claude Code",
+     "reason": "Install and start the Docker daemon you asked for.",
+     "commands": [
+       {"cmd": "pacman -S --needed --noconfirm docker", "why": "Install Docker"},
+       {"cmd": "systemctl enable --now docker.socket", "why": "Start it on demand"}
+     ]}
+    EOF
+
+    anumati --why "Reload udev rules" --cmd "udevadm control --reload"   # one-off form
+    anumati --schema     # request/result format (JSON Schema)
+    anumati --mcp        # MCP server on stdio (tool: request_root_commands)
+
+Exit codes: 0 every command approved and succeeded; 1 an approved command
+failed; 3 nothing ran (denied, timed out, wrong password); 4 some commands
+were declined, the approved ones succeeded; 2 bad request or tool error.
+
+Commands run with `bash -c`, from /, as root, with no stdin and no tty: use
+non-interactive flags (pacman --noconfirm, apt -y). The user can decline any
+of them, so check "results" for each command's "state". Docs:
+https://github.com/Theyashsawarkar/anumati
+"""
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import uuid
+
+DIALOG = "/usr/local/lib/anumati/dialog.py"
+LIB = "/usr/local/lib/anumati"
+VERSION = "1.1.0"
+
+MAX_COMMANDS, MAX_CMD, MAX_WHY, MAX_REASON, MAX_REQUESTER = 50, 8000, 500, 2000, 80
+# Characters that can make displayed text differ from what runs: C0/C1
+# controls (except tab/newline), bidi overrides and isolates, zero-width.
+HIDDEN = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f​-‏‪-‮⁠-⁩﻿]")
+
+SCHEMA = {
+    "request": {
+        "type": "object",
+        "required": ["commands"],
+        "properties": {
+            "requester": {"type": "string", "maxLength": MAX_REQUESTER,
+                          "description": "Who is asking, shown to the user (e.g. 'Claude Code')."},
+            "reason": {"type": "string", "maxLength": MAX_REASON,
+                       "description": "Why these commands are needed, in plain words."},
+            "commands": {"type": "array", "minItems": 1, "maxItems": MAX_COMMANDS, "items": {
+                "type": "object", "required": ["cmd", "why"],
+                "properties": {
+                    "cmd": {"type": "string", "maxLength": MAX_CMD,
+                            "description": "Run as root with bash -c, from /, no stdin."},
+                    "why": {"type": "string", "maxLength": MAX_WHY,
+                            "description": "What this command does and why, one line."}}}},
+        },
+    },
+    "result": {
+        "type": "object",
+        "properties": {
+            "status": {"enum": ["completed", "denied", "timeout", "auth_failed", "error"]},
+            "message": {"type": "string"},
+            "approved": {"type": "array", "items": {"type": "integer"}},
+            "declined": {"type": "array", "items": {"type": "integer"}},
+            "results": {"type": "array", "items": {"type": "object", "properties": {
+                "index": {"type": "integer"}, "command": {"type": "string"}, "why": {"type": "string"},
+                "decision": {"enum": ["approved", "declined"]},
+                "state": {"enum": ["ok", "failed", "skipped", "declined", "not_run"]},
+                "exit_code": {"type": "integer"}, "stdout": {"type": "string"},
+                "stderr": {"type": "string"}, "duration": {"type": "number"},
+                "timed_out": {"type": "boolean"}, "truncated": {"type": "boolean"}}}},
+        },
+    },
+}
+
+
+class BadRequest(Exception):
+    pass
+
+
+def validate(req):
+    if not isinstance(req, dict):
+        raise BadRequest("the request must be a JSON object")
+    cmds = req.get("commands")
+    if not isinstance(cmds, list) or not cmds:
+        raise BadRequest("'commands' must be a non-empty list")
+    if len(cmds) > MAX_COMMANDS:
+        raise BadRequest(f"at most {MAX_COMMANDS} commands per request")
+    clean = []
+    for i, c in enumerate(cmds):
+        if not isinstance(c, dict) or not isinstance(c.get("cmd"), str) or not c["cmd"].strip():
+            raise BadRequest(f"commands[{i}] needs a non-empty 'cmd' string")
+        if not isinstance(c.get("why"), str) or not c["why"].strip():
+            raise BadRequest(f"commands[{i}] needs a 'why': the user decides from it")
+        if len(c["cmd"]) > MAX_CMD or len(c["why"]) > MAX_WHY:
+            raise BadRequest(f"commands[{i}] is too long (cmd {MAX_CMD}, why {MAX_WHY} chars)")
+        for field in ("cmd", "why"):
+            if HIDDEN.search(c[field]):
+                raise BadRequest(f"commands[{i}].{field} contains control or invisible characters")
+        clean.append({"cmd": c["cmd"], "why": c["why"].strip()})
+    out = {"commands": clean}
+    for field, limit in (("requester", MAX_REQUESTER), ("reason", MAX_REASON)):
+        v = req.get(field, "")
+        if not isinstance(v, str) or len(v) > limit:
+            raise BadRequest(f"'{field}' must be a string of at most {limit} chars")
+        if HIDDEN.search(v.replace("\n", " ")):
+            raise BadRequest(f"'{field}' contains control or invisible characters")
+        out[field] = v.strip()
+    return out
+
+
+def session_env():
+    """The graphical session the dialog must appear on."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    wayland = os.environ.get("WAYLAND_DISPLAY")
+    if not wayland:
+        socks = sorted(f for f in os.listdir(runtime) if re.fullmatch(r"wayland-\d+", f)) if os.path.isdir(runtime) else []
+        wayland = socks[0] if socks else None
+    if not wayland:
+        raise BadRequest("no Wayland session found: the approval window needs the user's desktop")
+    env = {"WAYLAND_DISPLAY": wayland, "XDG_RUNTIME_DIR": runtime,
+           "HOME": os.path.expanduser("~"), "LANG": os.environ.get("LANG", "C.UTF-8"),
+           # Root-owned, so user GTK CSS/settings can't restyle (or hide) the dialog.
+           "XDG_CONFIG_HOME": f"{LIB}/config", "XDG_DATA_HOME": f"{LIB}/data",
+           "XDG_DATA_DIRS": "/usr/local/share:/usr/share",
+           "XDG_CACHE_HOME": os.path.join(runtime, "anumati", "cache"),
+           "PATH": "/usr/local/bin:/usr/bin"}
+    bus = os.environ.get("DBUS_SESSION_BUS_ADDRESS") or f"unix:path={runtime}/bus"
+    env["DBUS_SESSION_BUS_ADDRESS"] = bus
+    return env
+
+
+def request(req):
+    """Show the approval window for a validated request; return the result."""
+    if not os.path.exists(DIALOG):
+        raise BadRequest(f"{DIALOG} is missing: run ~/dotfiles/ai/apply.sh")
+    env = session_env()
+    rid = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:8]
+    base = os.path.join(env["XDG_RUNTIME_DIR"], "anumati")
+    os.makedirs(base, mode=0o700, exist_ok=True)
+    os.makedirs(env["XDG_CACHE_HOME"], mode=0o700, exist_ok=True)
+    rdir = os.path.join(base, rid)
+    os.mkdir(rdir, 0o700)
+    with open(os.path.join(rdir, "request.json"), "w") as f:
+        json.dump({"id": rid, **req}, f)
+    unit = f"anumati-{rid}"
+    # A transient user service: the dialog isn't a child of this process
+    # (or of the agent), and env -i drops anything the caller set.
+    cmd = ["systemd-run", "--user", "--quiet", "--collect", f"--unit={unit}",
+           "--", "/usr/bin/env", "-i", *(f"{k}={v}" for k, v in env.items()),
+           "/usr/bin/python3", "-I", DIALOG, rdir]
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    if p.returncode != 0:
+        raise BadRequest(f"couldn't start the approval window: {p.stderr.strip()}")
+    if shutil.which("notify-send"):
+        n = len(req["commands"])
+        subprocess.run(["notify-send", "-a", "anumati", "-u", "critical", "-i", "security-high",
+                        "Root access requested",
+                        f"{req.get('requester') or 'An AI agent'} wants to run {n} command{'s' * (n != 1)} as root."],
+                       capture_output=True)
+    # The window enforces the 10-minute expiry itself (it writes a
+    # "timeout" result), so wait for a result or for the window to exit.
+    result_path = os.path.join(rdir, "result.json")
+    try:
+        while True:
+            if os.path.exists(result_path):
+                with open(result_path) as f:
+                    return json.load(f)
+            if subprocess.run(["systemctl", "--user", "is-active", "--quiet", unit]).returncode != 0:
+                time.sleep(0.5)  # the result may land just as the unit stops
+                if os.path.exists(result_path):
+                    continue
+                return {"id": rid, "status": "error", "results": [],
+                        "message": f"the approval window exited without a result (journalctl --user -u {unit})"}
+            time.sleep(0.25)
+    finally:
+        shutil.rmtree(rdir, ignore_errors=True)
+
+
+def exit_code(result):
+    st = result.get("status")
+    if st != "completed":
+        return 2 if st == "error" else 3
+    states = [r.get("state") for r in result.get("results", [])]
+    if "failed" in states:
+        return 1
+    if "declined" in states:
+        return 4
+    return 0
+
+
+# ---------------------------------------------------------------- MCP ----
+MCP_TOOL = {
+    "name": "request_root_commands",
+    "title": "Run commands as root (with the user's approval)",
+    "description": (
+        "Ask the user to approve shell commands that need root. An approval window shows every command "
+        "with your 'why'; the user ticks which to allow and enters their password once; the approved ones "
+        "run as root with bash -c, from /, with no stdin (use non-interactive flags like --noconfirm), "
+        "stopping at the first failure. Returns each command's decision, state, exit code and output. "
+        "Blocks until the user answers (up to 10 minutes). The user may decline some or all commands: "
+        "check each result's 'state'. Never use this to work around a refusal."),
+    "inputSchema": SCHEMA["request"],
+}
+
+
+def mcp_serve():
+    out_lock = threading.Lock()
+
+    def send(obj):
+        with out_lock:
+            sys.stdout.write(json.dumps(obj) + "\n")
+            sys.stdout.flush()
+
+    def call(msg_id, args):
+        try:
+            res = request(validate(args or {}))
+            send({"jsonrpc": "2.0", "id": msg_id, "result": {
+                "content": [{"type": "text", "text": json.dumps(res, indent=2)}],
+                "structuredContent": res,
+                "isError": res.get("status") != "completed"}})
+        except BadRequest as e:
+            send({"jsonrpc": "2.0", "id": msg_id, "result": {
+                "content": [{"type": "text", "text": f"Bad request: {e}"}], "isError": True}})
+        except Exception as e:  # keep the server alive whatever happens
+            send({"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32603, "message": str(e)}})
+
+    for line in sys.stdin:
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            send({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}})
+            continue
+        method, msg_id = msg.get("method"), msg.get("id")
+        if msg_id is None:
+            continue  # notifications (initialized, cancelled) need no answer
+        if method == "initialize":
+            client = (msg.get("params") or {}).get("protocolVersion") or "2025-06-18"
+            send({"jsonrpc": "2.0", "id": msg_id, "result": {
+                "protocolVersion": client,
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": {"name": "anumati", "version": VERSION},
+                "instructions": "Use request_root_commands for anything that needs root on this "
+                                "machine, instead of asking the user to paste sudo commands."}})
+        elif method == "ping":
+            send({"jsonrpc": "2.0", "id": msg_id, "result": {}})
+        elif method == "tools/list":
+            send({"jsonrpc": "2.0", "id": msg_id, "result": {"tools": [MCP_TOOL]}})
+        elif method == "tools/call":
+            params = msg.get("params") or {}
+            if params.get("name") != MCP_TOOL["name"]:
+                send({"jsonrpc": "2.0", "id": msg_id,
+                      "error": {"code": -32602, "message": f"unknown tool {params.get('name')!r}"}})
+                continue
+            threading.Thread(target=call, args=(msg_id, params.get("arguments")), daemon=True).start()
+        else:
+            send({"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32601, "message": f"no method {method}"}})
+    return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="anumati", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--file", help="read the JSON request from this file (default: stdin)")
+    ap.add_argument("--cmd", action="append", default=[], help="a command (pair each with --why)")
+    ap.add_argument("--why", action="append", default=[], help="why the matching --cmd is needed")
+    ap.add_argument("--reason", default="", help="overall reason (with --cmd)")
+    ap.add_argument("--requester", default=None, help="who is asking (shown to the user)")
+    ap.add_argument("--schema", action="store_true", help="print the request/result JSON Schema")
+    ap.add_argument("--mcp", action="store_true", help="serve MCP on stdio")
+    ap.add_argument("--version", action="version", version=VERSION)
+    a = ap.parse_args()
+    if a.schema:
+        print(json.dumps(SCHEMA, indent=2))
+        return 0
+    if a.mcp:
+        return mcp_serve()
+    try:
+        if a.cmd:
+            if len(a.cmd) != len(a.why):
+                raise BadRequest("give one --why for every --cmd")
+            raw = {"reason": a.reason, "commands": [{"cmd": c, "why": w} for c, w in zip(a.cmd, a.why)]}
+        else:
+            if not a.file and sys.stdin.isatty():
+                ap.print_help()
+                return 2
+            text = open(a.file).read() if a.file else sys.stdin.read()
+            try:
+                raw = json.loads(text)
+            except ValueError as e:
+                raise BadRequest(f"not valid JSON: {e}")
+        if a.requester is not None and isinstance(raw, dict):
+            raw["requester"] = a.requester
+        result = request(validate(raw))
+    except BadRequest as e:
+        result = {"status": "error", "message": str(e), "results": []}
+    print(json.dumps(result, indent=2))
+    return exit_code(result)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

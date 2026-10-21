@@ -1,0 +1,25 @@
+name: Bug report
+description: Something in anumati doesn't work as described
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of `anumati --version`, your desktop (compositor) and distribution.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Request and log
+      description: The request (redact anything private) and `tail ~/.local/state/anumati/requests.jsonl`.
+      render: text

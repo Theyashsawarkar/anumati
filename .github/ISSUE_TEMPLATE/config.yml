@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem privately
+    url: https://github.com/Theyashsawarkar/anumati/security/advisories/new
+    about: Anything that lets something run as root without the user's informed approval.
