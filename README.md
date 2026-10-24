@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <img alt="The approval window: Claude Code asks to run three commands to install Docker, each with its reason and a checkbox, and a password field with Deny and Run 3 selected" src="assets/screenshots/approve.jpg" width="80%">
+  <img alt="The approval window: a Root access pill and Claude Code's request in the top bar, each command as a card with its reason and a checkbox, the password field with Deny and Run, and the keys in the footer" src="assets/screenshots/window.png" width="80%">
 </p>
 
 > *Anumati* (अनुमति) is Sanskrit for "permission, consent": nothing runs
@@ -107,9 +107,10 @@ order, stopping at the first failure, and each card shows its result. If
 they all succeed the window closes by itself; if one fails it stays open
 with the error.
 
-<p align="center">
-  <img alt="The window after an approved run: each command shows a tick and its duration, and Done: 3 succeeded. Closing…" src="assets/screenshots/done.jpg" width="80%">
-</p>
+It looks like the rest of the desktop: [Vyom](https://github.com/Theyashsawarkar/vyom)'s
+panels, in your [varna](https://github.com/Theyashsawarkar/varna) theme when
+you have one. The theme's colours are used only if everything stays readable
+(see Security), so a theme can change tints, never hide anything.
 
 | Key | Action |
 |---|---|
@@ -256,7 +257,7 @@ type your password.
 | Guarantee | How |
 |---|---|
 | The agent never sees your password | It's typed into the approval window: a separate process the agent didn't start (a transient systemd user service, with a clean environment) and can't inspect (`PR_SET_DUMPABLE=0`). |
-| What runs is what you saw | The window and the root-side runner are root-owned files; the window holds the request in memory once shown; Python runs isolated (`-I`); your GTK styling can't hide part of it (the window uses root-owned XDG dirs); invisible or direction-changing characters are refused. |
+| What runs is what you saw | The window and the root-side runner are root-owned files; the window holds the request in memory once shown; Python runs isolated (`-I`); your GTK styling can't hide part of it (the window uses root-owned XDG dirs); the theme's colours are read as plain `#rrggbb` only and used only while every text stays readable, else anumati's own ([ADR 6](docs/adr/0006-themed-but-never-hidden.md)); invisible or direction-changing characters are refused. |
 | No leftover access | sudo runs with `-k` both times: no cached credentials for anything else. |
 
 What it **can't** do: protect you from a program that is actively malicious

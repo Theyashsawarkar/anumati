@@ -40,44 +40,129 @@ MAX_ATTEMPTS = 3             # wrong passwords before the request fails
 AUTO_CLOSE_MS = 1500         # after a fully successful run
 STATE_LOG = os.path.join(pwd.getpwuid(os.getuid()).pw_dir, ".local/state/anumati/requests.jsonl")
 
+# The look: Vyom's panels (github.com/Theyashsawarkar/vyom), so this window
+# reads as part of the same desktop: a glass card, a mode pill in the top
+# bar, rounded rows, key caps in the footer. Colours come from the user's
+# varna theme only through theme() below, which accepts a palette only if
+# every text stays clearly readable; anything else gets FALLBACK.
 CSS = """
-@define-color accent_color #cba6f7;
-@define-color accent_bg_color #cba6f7;
-@define-color accent_fg_color #11111b;
-/* Nearly opaque: text behind the window shouldn't read as part of it. */
-window.elevate { background: rgba(24, 24, 37, 0.97); color: #cdd6f4; }
-.elevate .title { font-size: 1.35rem; font-weight: 700; color: #f5e0dc; }
-.elevate .subtitle { color: #a6adc8; }
-.elevate checkbutton check { border-color: #6c7086; background: rgba(17, 17, 27, 0.7); }
-.elevate checkbutton check:checked { background: #cba6f7; border-color: #cba6f7; color: #11111b; }
-.elevate .reason { color: #cdd6f4; }
-.elevate .shield { color: #f38ba8; }
-.elevate .cmd-card {
-  background: rgba(49, 50, 68, 0.55); border: 1px solid rgba(203, 166, 247, 0.18);
-  border-radius: 12px; padding: 10px 12px;
+window.elevate {
+  /* Glass like Vyom's panels, but never see-through enough to read what's
+     behind (the compositor's blur does the rest): 0.84, where they're 0.55. */
+  background-color: alpha(@base, 0.84);
+  color: @text; font-family: "Inter", "Noto Sans", sans-serif; font-size: 13px;
 }
+.elevate .topbar { padding: 12px 16px; border-bottom: 1px solid alpha(@text, 0.06); }
+.elevate .mode { padding: 5px 11px 5px 9px; border-radius: 10px; font-weight: 600; font-size: 12.5px;
+  background-color: alpha(@error, 0.15); color: @error; }
+.elevate .glyph { font-family: "JetBrainsMono Nerd Font", monospace; font-size: 15px; }
+.elevate .title { font-size: 15px; font-weight: 600; color: @text; }
+.elevate .requester { color: @accent; font-weight: 700; }
+.elevate .body { padding: 14px 16px 6px 16px; }
+.elevate .reason { color: @subtext; font-size: 13px; }
+.elevate .section { color: @muted; font-size: 10.5px; font-weight: 700; letter-spacing: 1px; }
+.elevate .cmd-card { background-color: alpha(@text, 0.05); border: 1px solid alpha(@accent, 0.18);
+  border-radius: 12px; padding: 10px 12px; }
 .elevate .cmd-card.declined { opacity: 0.5; }
-.elevate .why { color: #cdd6f4; font-weight: 600; }
-.elevate .cmd {
-  font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", monospace; font-size: 0.92rem;
-  color: #a6e3a1; background: rgba(17, 17, 27, 0.7); border-radius: 8px; padding: 6px 8px;
-}
-.elevate .state { font-family: monospace; font-size: 0.85rem; color: #a6adc8; }
-.elevate .state.ok { color: #a6e3a1; }
-.elevate .state.failed { color: #f38ba8; }
-.elevate .state.skipped, .elevate .state.declined { color: #6c7086; }
-.elevate .output {
-  font-family: monospace; font-size: 0.82rem; color: #bac2de;
-  background: rgba(17, 17, 27, 0.7); border-radius: 8px; padding: 6px 8px;
-}
-.elevate .note { color: #7f849c; font-size: 0.85rem; }
-.elevate .error { color: #f38ba8; font-weight: 600; }
-.elevate .countdown { color: #fab387; font-size: 0.85rem; }
-.elevate button.run { background: #cba6f7; color: #11111b; font-weight: 700; }
-.elevate button.run:disabled { background: #45475a; color: #7f849c; }
-.elevate button.deny { color: #f38ba8; }
-.elevate entry { background: rgba(17, 17, 27, 0.7); }
+.elevate .why { color: @text; font-weight: 600; font-size: 13.5px; }
+.elevate .cmd { font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", monospace; font-size: 12.5px;
+  color: @code; background-color: alpha(@crust, 0.7); border-radius: 10px; padding: 7px 10px; }
+.elevate .state { font-family: "JetBrainsMono Nerd Font", monospace; font-size: 11.5px; color: @subtext; }
+.elevate .state.ok { color: @ok; }
+.elevate .state.failed { color: @error; }
+.elevate .state.skipped, .elevate .state.declined { color: @muted; }
+.elevate .output { font-family: "JetBrainsMono Nerd Font", monospace; font-size: 11.5px; color: @subtext;
+  background-color: alpha(@crust, 0.7); border-radius: 10px; padding: 7px 10px; }
+.elevate .note { color: @muted; font-size: 12px; }
+.elevate .error { color: @error; font-weight: 600; }
+.elevate checkbutton check { border-color: @muted; background-color: alpha(@crust, 0.7); }
+.elevate checkbutton check:checked { background-color: @accent; border-color: @accent; color: @on_accent; }
+.elevate entry { background-color: alpha(@crust, 0.7); border-radius: 10px; min-height: 34px; }
+.elevate button.btn { padding: 7px 14px; border-radius: 10px; font-weight: 600; font-size: 12.5px;
+  background-color: alpha(@text, 0.06); border: 1px solid alpha(@text, 0.08); color: @text; box-shadow: none; }
+.elevate button.btn.run { background-color: @accent; color: @on_accent; border-color: transparent; }
+.elevate button.btn.run:disabled { background-color: alpha(@text, 0.08); color: @muted; }
+.elevate button.btn.deny { background-color: alpha(@error, 0.16); color: @error; border-color: alpha(@error, 0.3); }
+.elevate .foot { padding: 9px 16px; border-top: 1px solid alpha(@text, 0.06); background-color: alpha(@crust, 0.25); }
+.elevate .hint { color: @muted; font-family: "JetBrainsMono Nerd Font", monospace; font-size: 11px; }
+.elevate .countdown { color: @warn; font-size: 11.5px; }
 """
+
+# Vayu's own colours (Catppuccin Mocha): used when there's no varna theme,
+# or the theme fails a check.
+FALLBACK = {"base": "#1e1e2e", "crust": "#11111b", "text": "#cdd6f4", "subtext": "#a6adc8",
+            "muted": "#7f849c", "accent": "#cba6f7", "code": "#a6e3a1", "ok": "#a6e3a1",
+            "error": "#f38ba8", "warn": "#fab387", "on_accent": "#11111b", "dark": True}
+
+
+def _luminance(h):
+    def ch(c):
+        c = c / 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = (int(h[i:i + 2], 16) for i in (1, 3, 5))
+    return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b)
+
+
+def contrast(a, b):
+    la, lb = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def theme(home):
+    """The user's varna colours, if they keep this window unmistakable.
+
+    palette.json is the user's file, so an agent running as the user could
+    write it too: it must never be able to make a command hard to read or
+    a button easy to miss. So every colour must be plain #rrggbb, the text
+    must be readable on everything it's drawn on (else the whole palette is
+    ignored), and any other colour that isn't readable enough is replaced by
+    the text colour."""
+    path = os.path.join(home, ".local/state/varna/palette.json")
+    try:
+        if os.path.getsize(path) > 65536:
+            return FALLBACK
+        with open(path) as f:
+            data = json.load(f)
+        c = data["colors"]
+        pick = lambda *names: next(c[n] for n in names if n in c)  # noqa: E731
+        t = {"base": pick("base"), "crust": pick("crust"), "text": pick("text"), "subtext": pick("subtext1", "subtext0"),
+             "muted": pick("overlay2", "subtext0"), "accent": pick("accent"), "code": pick("green", "ok"),
+             "ok": pick("ok", "green"), "error": pick("error", "red"), "warn": pick("warn", "yellow"),
+             "dark": data.get("variant") != "light"}
+    except (OSError, ValueError, KeyError, TypeError, StopIteration):
+        return FALLBACK
+    if not all(isinstance(v, str) and len(v) == 7 and v[0] == "#" and all(x in "0123456789abcdefABCDEF" for x in v[1:])
+               for k, v in t.items() if k != "dark"):
+        return FALLBACK
+    t = {k: (v.lower() if k != "dark" else v) for k, v in t.items()}
+    # Must hold, or the whole palette is ignored: the body text and the
+    # command blocks readable (4.5:1, WCAG AA) on what they're drawn on.
+    if contrast(t["text"], t["base"]) < 4.5 or contrast(t["text"], t["crust"]) < 4.5:
+        return FALLBACK
+    # Every other colour that isn't readable enough is replaced by the text
+    # colour (always readable, see above): a faint theme colour, or one an
+    # agent made faint, never makes anything hard to see.
+    if contrast(t["code"], t["crust"]) < 7:          # the command itself: AAA, else plain text
+        t["code"] = t["text"]
+    for role, need in (("subtext", 4.5), ("error", 4.5), ("warn", 4.5), ("ok", 4.5)):
+        if contrast(t[role], t["base"]) < need:
+            t[role] = t["text"]
+    if contrast(t["muted"], t["base"]) < 3:
+        t["muted"] = t["subtext"]
+    # The Run button: the accent, labelled in whichever reads better on it.
+    # (the theme's own ink first, like Vyom's buttons; black or white only if needed)
+    t["on_accent"] = next((c for c in (t["crust"], t["text"], "#000000", "#ffffff")
+                           if contrast(c, t["accent"]) >= 4.5), t["crust"])
+    if contrast(t["accent"], t["base"]) < 3 or contrast(t["on_accent"], t["accent"]) < 4.5:
+        return FALLBACK
+    return t
+
+
+def theme_css(t):
+    # libadwaita's own accent (focus rings, the selected text) is the theme's too.
+    adw = f"@define-color accent_color {t['accent']};\n@define-color accent_bg_color {t['accent']};\n" \
+          f"@define-color accent_fg_color {t['on_accent']};\n"
+    return "".join(f"@define-color {k} {v};\n" for k, v in t.items() if k != "dark") + adw + CSS
 
 
 def harden():
@@ -107,8 +192,14 @@ class Request:
         self.commands = [(str(c["cmd"]), str(c.get("why") or "")) for c in data["commands"]][:50]
 
 
+def keycap(keys, t):
+    """'Esc' as a key cap (Pango), like Vyom's footer hints."""
+    return (f"<span background='{t['crust']}' foreground='{t['subtext']}' font_family='JetBrainsMono Nerd Font'> "
+            + GLib.markup_escape_text(keys) + " </span>")
+
+
 class ElevateWindow(Adw.ApplicationWindow):
-    def __init__(self, app, req, outdir):
+    def __init__(self, app, req, outdir, t=FALLBACK):
         super().__init__(application=app, title="Root access requested")
         self.req, self.outdir = req, outdir
         self.started = time.monotonic()
@@ -118,7 +209,7 @@ class ElevateWindow(Adw.ApplicationWindow):
         self.results = [{"index": i, "command": c, "why": w, "decision": "approved", "state": "not_run"}
                         for i, (c, w) in enumerate(req.commands)]
         self.add_css_class("elevate")
-        self.set_default_size(780, -1)
+        self.set_default_size(820, -1)
         self.connect("close-request", self.on_close)
 
         # Capture phase: the window sees Esc/Enter before any child, so a
@@ -128,48 +219,54 @@ class ElevateWindow(Adw.ApplicationWindow):
         keys.connect("key-pressed", self.on_key)
         self.add_controller(keys)
 
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14,
-                        margin_top=22, margin_bottom=18, margin_start=24, margin_end=24)
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
 
-        head = Gtk.Box(spacing=14)
-        shield = Gtk.Image.new_from_icon_name("security-high-symbolic")
-        shield.set_pixel_size(36)
-        shield.add_css_class("shield")
-        head.append(shield)
-        titles = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        t = Gtk.Label(label="Root access requested", xalign=0)
-        t.add_css_class("title")
+        # Top bar, like a Vyom panel's: the mode pill, then what's asked.
+        top = Gtk.Box(spacing=12)
+        top.add_css_class("topbar")
+        pill = Gtk.Box(spacing=7, valign=Gtk.Align.CENTER)
+        pill.add_css_class("mode")
+        glyph = Gtk.Label(label="\U000f0483")   # nf-md-shield_alert
+        glyph.add_css_class("glyph")
+        pill.append(glyph)
+        pill.append(Gtk.Label(label="Root access"))
+        top.append(pill)
         n = len(req.commands)
-        sub = Gtk.Label(xalign=0, wrap=True, use_markup=True)
-        sub.set_markup(f"<span foreground='#cba6f7' weight='bold'>{GLib.markup_escape_text(req.requester)}</span>"
-                       f" wants to run {n} command{'s' if n != 1 else ''} as root")
-        sub.add_css_class("subtitle")
-        titles.append(t)
-        titles.append(sub)
-        head.append(titles)
-        outer.append(head)
+        who = Gtk.Label(label=req.requester, xalign=0)
+        who.add_css_class("requester")
+        top.append(who)
+        t_ = Gtk.Label(label=f"wants to run {n} command{'s' if n != 1 else ''} as root", xalign=0, hexpand=True,
+                       wrap=True)
+        t_.add_css_class("title")
+        top.append(t_)
+        outer.append(top)
 
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        body.add_css_class("body")
         if req.reason:
             r = Gtk.Label(label=req.reason, xalign=0, wrap=True, selectable=True)
             r.add_css_class("reason")
-            outer.append(r)
+            body.append(r)
 
-        cards = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        sec = Gtk.Label(label="COMMANDS", xalign=0)
+        sec.add_css_class("section")
+        body.append(sec)
+        cards = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.checks, self.states, self.outputs, self.card_boxes = [], [], [], []
         for i, (cmd, why) in enumerate(req.commands):
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             card.add_css_class("cmd-card")
-            top = Gtk.Box(spacing=10)
+            row = Gtk.Box(spacing=10)
             check = Gtk.CheckButton(active=True)
             check.connect("toggled", self.on_toggle, i)
-            top.append(check)
+            row.append(check)
             wl = Gtk.Label(label=why or "(no reason given)", xalign=0, wrap=True, hexpand=True)
             wl.add_css_class("why")
-            top.append(wl)
+            row.append(wl)
             state = Gtk.Label(label="", xalign=1)
             state.add_css_class("state")
-            top.append(state)
-            card.append(top)
+            row.append(state)
+            card.append(row)
             # The exact text that will run: selectable, wrapped by character
             # so nothing can hide past the edge.
             cl = Gtk.Label(label=cmd, xalign=0, wrap=True, selectable=True)
@@ -188,36 +285,48 @@ class ElevateWindow(Adw.ApplicationWindow):
         scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER,
                                       propagate_natural_height=True, max_content_height=520)
         scroller.set_child(cards)
-        outer.append(scroller)
+        body.append(scroller)
 
         note = Gtk.Label(xalign=0, wrap=True,
                          label="Each ticked command runs as root with bash -c, from /, with no input. "
                                "It stops at the first command that fails. Untick anything you don't want run.")
         note.add_css_class("note")
-        outer.append(note)
+        body.append(note)
 
-        self.error = Gtk.Label(xalign=0, visible=False)
+        self.error = Gtk.Label(xalign=0, visible=False, wrap=True)
         self.error.add_css_class("error")
-        outer.append(self.error)
+        body.append(self.error)
 
-        bottom = Gtk.Box(spacing=10)
+        bottom = Gtk.Box(spacing=8, margin_bottom=8)
         self.password = Gtk.PasswordEntry(show_peek_icon=True, hexpand=True,
                                           placeholder_text="Your password (for sudo)")
         self.password.connect("activate", lambda *_: self.on_run())
         bottom.append(self.password)
         self.deny_btn = Gtk.Button(label="Deny")
+        self.deny_btn.add_css_class("btn")
         self.deny_btn.add_css_class("deny")
         self.deny_btn.connect("clicked", lambda *_: self.finish_denied("denied", "The user denied the request."))
         bottom.append(self.deny_btn)
         self.run_btn = Gtk.Button()
+        self.run_btn.add_css_class("btn")
         self.run_btn.add_css_class("run")
         self.run_btn.connect("clicked", lambda *_: self.on_run())
         bottom.append(self.run_btn)
-        outer.append(bottom)
+        body.append(bottom)
+        outer.append(body)
 
-        self.countdown = Gtk.Label(xalign=0)
+        # Footer, like Vyom's: the keys, then the time left.
+        foot = Gtk.Box(spacing=16)
+        foot.add_css_class("foot")
+        for keys, what in (("Space", "toggle"), ("Enter", "run"), ("Esc", "deny")):
+            h = Gtk.Label(use_markup=True)
+            h.set_markup(f"{keycap(keys, t)} {GLib.markup_escape_text(what)}")
+            h.add_css_class("hint")
+            foot.append(h)
+        self.countdown = Gtk.Label(xalign=1, hexpand=True)
         self.countdown.add_css_class("countdown")
-        outer.append(self.countdown)
+        foot.append(self.countdown)
+        outer.append(foot)
 
         self.set_content(outer)
         self.update_run_label()
@@ -265,7 +374,7 @@ class ElevateWindow(Adw.ApplicationWindow):
         if left <= 0:
             self.finish_denied("timeout", f"No answer within {EXPIRES_AFTER // 60} minutes.")
             return False
-        self.countdown.set_label(f"Expires in {left // 60}:{left % 60:02d}; then it counts as denied.")
+        self.countdown.set_label(f"expires in {left // 60}:{left % 60:02d}, then counts as denied")
         return True
 
     # ---- running ---------------------------------------------------------
@@ -457,13 +566,15 @@ def main():
                           {"status": "error", "message": f"bad request: {e}", "results": []})
         return 2
     Adw.init()
-    Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.FORCE_DARK)
+    t = theme(pwd.getpwuid(os.getuid()).pw_dir)
+    Adw.StyleManager.get_default().set_color_scheme(
+        Adw.ColorScheme.FORCE_DARK if t["dark"] else Adw.ColorScheme.FORCE_LIGHT)
     provider = Gtk.CssProvider()
-    provider.load_from_string(CSS)
+    provider.load_from_string(theme_css(t))
     Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), provider,
                                               Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1)
     app = Adw.Application(application_id=APP_ID, flags=Gio.ApplicationFlags.NON_UNIQUE)
-    app.connect("activate", lambda a: ElevateWindow(a, req, outdir).present())
+    app.connect("activate", lambda a: ElevateWindow(a, req, outdir, t).present())
     app.run([])
     return 0
 
