@@ -10,6 +10,7 @@
 # Installs:
 #   /usr/local/bin/anumati                 the CLI / MCP server agents call
 #   /usr/local/lib/anumati/dialog.py       the approval window (GTK 4)
+#   /usr/local/lib/anumati/theme.py        its look and the theme readability check
 #   /usr/local/lib/anumati/runner.py       runs the approved commands as root
 #   /usr/local/lib/anumati/{config,data}/  empty XDG dirs for the window, so
 #                                          your GTK CSS can't restyle it
@@ -46,6 +47,7 @@ fi
 files=(
   "bin/anumati:/usr/local/bin/anumati"
   "lib/dialog.py:$lib/dialog.py"
+  "lib/theme.py:$lib/theme.py"
   "lib/runner.py:$lib/runner.py"
 )
 for pair in "${files[@]}"; do

@@ -2,6 +2,13 @@
 
 Newest first. Releases are tags (`vX.Y.Z`) with `VERSION` in `bin/anumati`.
 
+## v1.2.1 -- 2026-10-24
+
+- The look and the theme check moved into `lib/theme.py` (pure Python),
+  loaded by path by the window: the tests that check a tampered theme can't
+  hide anything now run in CI, which has no GTK (1.2.0's CI failed there).
+  install.sh installs it next to dialog.py.
+
 ## v1.2.0 -- 2026-10-24
 
 - **Looks like the rest of the desktop.** The window has Vyom's layout: a

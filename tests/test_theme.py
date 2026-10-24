@@ -9,11 +9,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
-import gi  # noqa: E402
-
-gi.require_version("Gtk", "4.0")
-gi.require_version("Adw", "1")
-import dialog  # noqa: E402
+import theme as dialog  # noqa: E402  (pure Python: no GTK needed, so CI runs it)
 
 ROSE_PINE = {"base": "#191724", "crust": "#111019", "text": "#e0def4", "subtext1": "#bcb8d6", "subtext0": "#908caa",
              "overlay2": "#908caa", "accent": "#c4a7e7", "green": "#9ccfd8", "ok": "#9ccfd8", "error": "#eb6f92",
