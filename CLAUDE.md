@@ -5,7 +5,9 @@ pulled into Vayu (github.com/Theyashsawarkar/vayu, whose CLAUDE.md
 "Plugins" rules apply); it must work on any Linux desktop on its own. It was
 called vayu-elevate until v1.1.0 (`/usr/local/bin/vayu-elevate` is a link).
 
-- `bin/anumati` (what agents call), `lib/dialog.py` (the window), `lib/runner.py`
+- `bin/anumati` (what agents call), `lib/dialog.py` (the window), `lib/remote.py`
+  (answering from the phone through ekatva; the same module as pramana's,
+  keep in step), `lib/runner.py`
   (runs as root). `install.sh` installs them root-owned into `/usr/local`:
   never make the installed copies user-writable or load code from the user's
   home at runtime.
