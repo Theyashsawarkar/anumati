@@ -69,6 +69,10 @@ command's output and exit code back.
 - **Audit trail**: a root-only log of everything that ran, and your own log
   of every request, denied ones included.
 - **Expires**: an unanswered request counts as denied after 10 minutes.
+- **Answer from your phone**: with [ekatva](https://github.com/Theyashsawarkar/ekatva)
+  running, the request also shows on your paired phone; approving there
+  (your fingerprint, your password) is the same as typing it here
+  ([ADR 7](docs/adr/0007-answer-from-the-phone.md)).
 
 ## Install
 
@@ -259,6 +263,7 @@ type your password.
 | The agent never sees your password | It's typed into the approval window: a separate process the agent didn't start (a transient systemd user service, with a clean environment) and can't inspect (`PR_SET_DUMPABLE=0`). |
 | What runs is what you saw | The window and the root-side runner are root-owned files; the window holds the request in memory once shown; Python runs isolated (`-I`); your GTK styling can't hide part of it (the window uses root-owned XDG dirs); the theme's colours are read as plain `#rrggbb` only and used only while every text stays readable, else anumati's own ([ADR 6](docs/adr/0006-themed-but-never-hidden.md)); invisible or direction-changing characters are refused. |
 | No leftover access | sudo runs with `-k` both times: no cached credentials for anything else. |
+| Answering from the phone changes none of this | The phone's answer, through ekatva's end-to-end encrypted link, ticks the commands visibly and fills the password field; then the same check and runner. The window sends nothing secret out, and finds ekatva by your uid, not the agent's environment ([ADR 7](docs/adr/0007-answer-from-the-phone.md)). |
 
 What it **can't** do: protect you from a program that is actively malicious
 and already running as your user. Such a program could draw a lookalike

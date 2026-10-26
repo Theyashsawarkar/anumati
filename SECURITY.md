@@ -21,3 +21,12 @@ Out of scope, as the README explains: a program already running as your
 user that is actively malicious (it could draw a lookalike window). In
 scope: anything that makes the window show one thing and run another, lets
 an agent see the password, leaves root access behind, or bypasses approval.
+
+## Answering from the phone
+
+With ekatva running, the window accepts answers over
+`/run/user/<uid>/ekatva-root.sock` (ADR 7). In scope: anything that makes
+an answer from that socket run something the window didn't show ticked,
+leaks the password out of the window, or lets a process other than the
+window's own sudo check decide. Out of scope, as above: a malicious
+program already running as you.

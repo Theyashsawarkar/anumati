@@ -51,6 +51,17 @@ def _load_theme_module():
 
 
 _theme = _load_theme_module()
+
+
+def _load_remote_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("anumati_remote", os.path.join(os.path.dirname(os.path.realpath(__file__)), "remote.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+remote = _load_remote_module()
 CSS, FALLBACK, contrast, theme, theme_css = _theme.CSS, _theme.FALLBACK, _theme.contrast, _theme.theme, _theme.theme_css
 
 
@@ -212,6 +223,15 @@ class ElevateWindow(Adw.ApplicationWindow):
             h.set_markup(f"{keycap(keys, t)} {GLib.markup_escape_text(what)}")
             h.add_css_class("hint")
             foot.append(h)
+        # Answerable from the phone too, when ekatva runs (lib/remote.py).
+        self.remote = remote.Remote.start(
+            {"id": req.id, "via": "anumati", "requester": req.requester, "reason": req.reason,
+             "commands": [{"cmd": c, "why": w} for c, w in req.commands]},
+            lambda answer: GLib.idle_add(self.remote_answer, answer))
+        if self.remote.connected:
+            h = Gtk.Label(label="also on your phone")
+            h.add_css_class("hint")
+            foot.append(h)
         self.countdown = Gtk.Label(xalign=1, hexpand=True)
         self.countdown.add_css_class("countdown")
         foot.append(self.countdown)
@@ -266,6 +286,22 @@ class ElevateWindow(Adw.ApplicationWindow):
         self.countdown.set_label(f"expires in {left // 60}:{left % 60:02d}, then counts as denied")
         return True
 
+    # ---- an answer from the phone ------------------------------------------
+    def remote_answer(self, answer):
+        """The same as answering here: the ticks you see are what runs, and
+        the password goes through the same sudo check."""
+        if self.done or self.running:
+            return False
+        if not answer["approve"]:
+            self.finish_denied("denied", "Denied on the phone.")
+            return False
+        for i, check in enumerate(self.checks):
+            check.set_active(i in answer["allow"])
+        self.password.set_text(answer["password"])
+        answer["password"] = None
+        self.on_run()
+        return False
+
     # ---- running ---------------------------------------------------------
     def on_run(self):
         if self.running or self.done or not self.selected():
@@ -297,6 +333,7 @@ class ElevateWindow(Adw.ApplicationWindow):
             if self.attempts >= MAX_ATTEMPTS:
                 self.finish_denied("auth_failed", f"Wrong password {MAX_ATTEMPTS} times.")
                 return False
+            self.remote.send({"t": "wrong", "attempts": self.attempts})
             self.error.set_label(f"Wrong password (attempt {self.attempts} of {MAX_ATTEMPTS}).")
             self.error.set_visible(True)
             for w in (*self.checks, self.password, self.deny_btn):
@@ -392,6 +429,8 @@ class ElevateWindow(Adw.ApplicationWindow):
             return
         self.done = True
         self.running = False
+        self.remote.send({"t": "done", "status": status})
+        self.remote.close()
         result = {"id": self.req.id, "status": status, "message": message,
                   "approved": [r["index"] for r in self.results if r["decision"] == "approved" and status == "completed"],
                   "declined": [r["index"] for r in self.results if r["decision"] == "declined"],

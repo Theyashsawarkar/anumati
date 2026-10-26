@@ -2,6 +2,20 @@
 
 Newest first. Releases are tags (`vX.Y.Z`) with `VERSION` in `bin/anumati`.
 
+## v1.3.0 -- 2026-10-26
+
+- Answer from your phone: when [ekatva](https://github.com/Theyashsawarkar/ekatva)
+  runs, the window also hands its request to ekatva
+  (`/run/user/<uid>/ekatva-root.sock`), which shows it on your paired
+  phone. Approving there (which commands, and your password) ticks those
+  commands in the window and fills the password field, then goes through
+  the same sudo check and runner as typing it here; a wrong password is
+  reported back so you can retry from the phone; denying there denies.
+  The window sends nothing secret out, finds the socket by uid (not the
+  agent's environment), and validates every answer strictly. Without
+  ekatva nothing changes. New `lib/remote.py` (pure Python, tested), ADR 7.
+  The footer says "also on your phone" while it's linked.
+
 ## v1.2.1 -- 2026-10-24
 
 - The look and the theme check moved into `lib/theme.py` (pure Python),
