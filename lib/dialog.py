@@ -1,7 +1,8 @@
 #!/usr/bin/python3 -I
-"""The anumati approval window: shows what an AI agent wants to run as
-root and why, lets the user pick which commands to allow, takes the sudo
-password once, runs the picked ones and writes the result for the agent.
+"""The anumati approval window: shows what an AI agent wants to run (as
+root, or as you: each command is marked) and why, lets the user pick which
+commands to allow, takes the sudo password once if any root command is
+picked, runs the picked ones in order and writes the result for the agent.
 
 Installed root-owned as /usr/local/lib/anumati/dialog.py by
 anumati's install.sh, and started only by anumati, as a transient user service
@@ -13,7 +14,7 @@ GTK CSS can hide a row). See ai/README.md for the threat model.
 
 Keys:
 # keybind: Anumati/root approval | Esc | Cancel the root request (deny everything; closes the window after a run)
-# keybind: Anumati/root approval | Enter (password field) | Run the selected commands as root
+# keybind: Anumati/root approval | Enter (password field or Run) | Run the selected commands (as root and as you)
 # keybind: Anumati/root approval | Space | Toggle the focused command
 # keybind: Anumati/root approval | Enter (after a failed run) | Close the window
 """
@@ -62,6 +63,17 @@ def _load_remote_module():
 
 
 remote = _load_remote_module()
+
+
+def _load_userrun_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("anumati_userrun", os.path.join(os.path.dirname(os.path.realpath(__file__)), "userrun.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+userrun = _load_userrun_module()
 CSS, FALLBACK, contrast, theme, theme_css = _theme.CSS, _theme.FALLBACK, _theme.contrast, _theme.theme, _theme.theme_css
 
 
@@ -89,7 +101,26 @@ class Request:
         self.id = str(data["id"])[:64]
         self.requester = str(data.get("requester") or "an AI agent")[:80]
         self.reason = str(data.get("reason") or "")[:2000]
-        self.commands = [(str(c["cmd"]), str(c.get("why") or "")) for c in data["commands"]][:50]
+        home = pwd.getpwuid(os.getuid()).pw_dir
+        # (cmd, why, "root"|"user", cwd): anything but "user" runs as root.
+        self.commands = [(str(c["cmd"]), str(c.get("why") or ""), "user" if c.get("as") == "user" else "root",
+                          str(c.get("cwd") or home) if c.get("as") == "user" else "/")
+                         for c in data["commands"]][:50]
+        self.root = [i for i, c in enumerate(self.commands) if c[2] == "root"]
+
+
+def summary(commands):
+    """'2 commands as root and 1 as you' (anumati's notification says the same)."""
+    root = sum(c[2] == "root" for c in commands)
+    user = len(commands) - root
+    first = root or user
+    text = f"{first} command{'s' * (first != 1)} as {'root' if root else 'you'}"
+    return text + (f" and {user} as you" if root and user else "")
+
+
+def short_home(path):
+    home = pwd.getpwuid(os.getuid()).pw_dir
+    return "~" + path[len(home):] if path == home or path.startswith(home + "/") else path
 
 
 def keycap(keys, t):
@@ -100,14 +131,16 @@ def keycap(keys, t):
 
 class ElevateWindow(Adw.ApplicationWindow):
     def __init__(self, app, req, outdir, t=FALLBACK):
-        super().__init__(application=app, title="Root access requested")
+        super().__init__(application=app, title="Root access requested" if req.root else "Approval requested")
         self.req, self.outdir = req, outdir
         self.started = time.monotonic()
         self.attempts = 0
         self.done = False          # result written
         self.running = False
-        self.results = [{"index": i, "command": c, "why": w, "decision": "approved", "state": "not_run"}
-                        for i, (c, w) in enumerate(req.commands)]
+        self.results = [{"index": i, "command": c, "why": w, "as": who, "cwd": cwd,
+                         "decision": "approved", "state": "not_run"}
+                        for i, (c, w, who, cwd) in enumerate(req.commands)]
+        self.user = pwd.getpwuid(os.getuid()).pw_name
         self.add_css_class("elevate")
         self.set_default_size(820, -1)
         self.connect("close-request", self.on_close)
@@ -126,17 +159,18 @@ class ElevateWindow(Adw.ApplicationWindow):
         top.add_css_class("topbar")
         pill = Gtk.Box(spacing=7, valign=Gtk.Align.CENTER)
         pill.add_css_class("mode")
-        glyph = Gtk.Label(label="\U000f0483")   # nf-md-shield_alert
+        if not req.root:
+            pill.add_css_class("user")
+        # nf-md-shield_alert for root, nf-md-account when everything runs as you
+        glyph = Gtk.Label(label="\U000f0483" if req.root else "\U000f0004")
         glyph.add_css_class("glyph")
         pill.append(glyph)
-        pill.append(Gtk.Label(label="Root access"))
+        pill.append(Gtk.Label(label="Root access" if req.root else "As you"))
         top.append(pill)
-        n = len(req.commands)
         who = Gtk.Label(label=req.requester, xalign=0)
         who.add_css_class("requester")
         top.append(who)
-        t_ = Gtk.Label(label=f"wants to run {n} command{'s' if n != 1 else ''} as root", xalign=0, hexpand=True,
-                       wrap=True)
+        t_ = Gtk.Label(label=f"wants to run {summary(req.commands)}", xalign=0, hexpand=True, wrap=True)
         t_.add_css_class("title")
         top.append(t_)
         outer.append(top)
@@ -153,13 +187,20 @@ class ElevateWindow(Adw.ApplicationWindow):
         body.append(sec)
         cards = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.checks, self.states, self.outputs, self.card_boxes = [], [], [], []
-        for i, (cmd, why) in enumerate(req.commands):
+        for i, (cmd, why, as_, cwd) in enumerate(req.commands):
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             card.add_css_class("cmd-card")
+            card.add_css_class(as_)
             row = Gtk.Box(spacing=10)
             check = Gtk.CheckButton(active=True)
             check.connect("toggled", self.on_toggle, i)
             row.append(check)
+            # Who it runs as, on every card, in its own colour: never implied
+            # by position. The number is the order they run in.
+            badge = Gtk.Label(label=f"{i + 1} · {'ROOT' if as_ == 'root' else 'YOU'}", valign=Gtk.Align.CENTER)
+            badge.add_css_class("badge")
+            badge.add_css_class(as_)
+            row.append(badge)
             wl = Gtk.Label(label=why or "(no reason given)", xalign=0, wrap=True, hexpand=True)
             wl.add_css_class("why")
             row.append(wl)
@@ -173,6 +214,11 @@ class ElevateWindow(Adw.ApplicationWindow):
             cl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
             cl.add_css_class("cmd")
             card.append(cl)
+            if as_ == "user":
+                where = Gtk.Label(label=f"as {self.user}, in {short_home(cwd)}", xalign=0, wrap=True, selectable=True)
+                where.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+                where.add_css_class("where")
+                card.append(where)
             out = Gtk.Label(xalign=0, wrap=True, selectable=True, visible=False)
             out.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
             out.add_css_class("output")
@@ -187,9 +233,15 @@ class ElevateWindow(Adw.ApplicationWindow):
         scroller.set_child(cards)
         body.append(scroller)
 
+        how = []
+        if req.root:
+            how.append("ROOT commands run as root, from /, after your password.")
+        if len(req.root) < len(req.commands):
+            how.append(f"YOU commands run as {self.user}, in the folder shown, outside the agent's sandbox, "
+                       "without a password.")
         note = Gtk.Label(xalign=0, wrap=True,
-                         label="Each ticked command runs as root with bash -c, from /, with no input. "
-                               "It stops at the first command that fails. Untick anything you don't want run.")
+                         label=" ".join(how) + " Each runs with bash -c and no input, in order, stopping at the "
+                               "first that fails. Untick anything you don't want run.")
         note.add_css_class("note")
         body.append(note)
 
@@ -199,9 +251,13 @@ class ElevateWindow(Adw.ApplicationWindow):
 
         bottom = Gtk.Box(spacing=8, margin_bottom=8)
         self.password = Gtk.PasswordEntry(show_peek_icon=True, hexpand=True,
-                                          placeholder_text="Your password (for sudo)")
+                                          placeholder_text="Your password (for the ROOT commands)")
         self.password.connect("activate", lambda *_: self.on_run())
+        # Only asked for when something would run as root.
+        self.password.set_visible(bool(req.root))
         bottom.append(self.password)
+        if not req.root:
+            bottom.append(Gtk.Box(hexpand=True))
         self.deny_btn = Gtk.Button(label="Deny")
         self.deny_btn.add_css_class("btn")
         self.deny_btn.add_css_class("deny")
@@ -226,8 +282,9 @@ class ElevateWindow(Adw.ApplicationWindow):
         # Answerable from the phone too, when ekatva runs (lib/remote.py).
         self.remote = remote.Remote.start(
             {"id": req.id, "via": "anumati", "requester": req.requester, "reason": req.reason,
-             "commands": [{"cmd": c, "why": w} for c, w in req.commands]},
-            lambda answer: GLib.idle_add(self.remote_answer, answer))
+             "commands": [{"cmd": c, "why": w, "as": who, **({"cwd": cwd} if who == "user" else {})}
+                          for c, w, who, cwd in req.commands]},
+            lambda answer: GLib.idle_add(self.remote_answer, answer), root=req.root)
         if self.remote.connected:
             h = Gtk.Label(label="also on your phone")
             h.add_css_class("hint")
@@ -241,11 +298,14 @@ class ElevateWindow(Adw.ApplicationWindow):
         self.update_run_label()
         self.tick()
         GLib.timeout_add_seconds(1, self.tick)
-        self.password.grab_focus()
+        (self.password if req.root else self.run_btn).grab_focus()
 
     # ---- selection -------------------------------------------------------
     def selected(self):
         return [i for i, c in enumerate(self.checks) if c.get_active()]
+
+    def needs_password(self):
+        return any(i in self.req.root for i in self.selected())
 
     def on_toggle(self, check, i):
         self.results[i]["decision"] = "approved" if check.get_active() else "declined"
@@ -259,6 +319,8 @@ class ElevateWindow(Adw.ApplicationWindow):
         n = len(self.selected())
         self.run_btn.set_label(f"Run {n} selected" if n else "Nothing selected")
         self.run_btn.set_sensitive(n > 0 and not self.running and not self.done)
+        if not self.running and not self.done:
+            self.password.set_sensitive(self.needs_password())
 
     def on_key(self, _ctrl, keyval, _code, _state):
         if keyval == Gdk.KEY_Escape:
@@ -270,7 +332,14 @@ class ElevateWindow(Adw.ApplicationWindow):
         if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and self.done:
             self.quit()
             return True
-        return False  # Enter before a run reaches the password field (activate = Run)
+        if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and isinstance(self.get_focus(), Gtk.CheckButton):
+            # On a card: run, or go to the password when it's needed.
+            if self.needs_password() and not self.password.get_text():
+                self.password.grab_focus()
+            else:
+                self.on_run()
+            return True
+        return False  # Enter in the password field: activate = Run; on a button: that button
 
     def quit(self):
         self.get_application().quit()
@@ -297,7 +366,8 @@ class ElevateWindow(Adw.ApplicationWindow):
             return False
         for i, check in enumerate(self.checks):
             check.set_active(i in answer["allow"])
-        self.password.set_text(answer["password"])
+        if answer["password"] is not None:
+            self.password.set_text(answer["password"])
         answer["password"] = None
         self.on_run()
         return False
@@ -315,6 +385,10 @@ class ElevateWindow(Adw.ApplicationWindow):
             w.set_sensitive(False)
         self.update_run_label()
         self.error.set_visible(False)
+        if not self.needs_password():
+            self.password.set_text("")
+            self.start_run(None)
+            return
         threading.Thread(target=self.check_password, args=(pw,), daemon=True).start()
 
     def check_password(self, pw):
@@ -343,35 +417,85 @@ class ElevateWindow(Adw.ApplicationWindow):
             self.update_run_label()
             return False
         self.password.set_text("")
+        self.start_run(pw)
+        return False
+
+    def start_run(self, pw):
         chosen = self.selected()
         for i, r in enumerate(self.results):
             if i not in chosen:
                 r["state"] = "declined"
                 self.set_state(i, "declined", "declined")
-        payload = {"id": self.req.id, "requester": self.req.requester,
-                   "commands": [self.req.commands[i][0] for i in chosen],
-                   "stop_on_failure": True, "timeout": 1800}
-        threading.Thread(target=self.run_runner, args=(pw, payload, chosen), daemon=True).start()
-        return False
+        threading.Thread(target=self.run_all, args=(pw, chosen), daemon=True).start()
 
-    def run_runner(self, pw, payload, chosen):
+    def run_all(self, pw, chosen):
+        """The chosen commands in request order: each run of consecutive
+        ROOT commands goes to the root runner (one sudo), each YOU command
+        runs here; the first failure skips the rest."""
+        groups = []
+        for i in chosen:
+            who = self.req.commands[i][2]
+            if groups and groups[-1][0] == who:
+                groups[-1][1].append(i)
+            else:
+                groups.append((who, [i]))
+        env = userrun.build_env(userrun.manager_env(), pwd.getpwuid(os.getuid()).pw_dir) \
+            if any(who == "user" for who, _ in groups) else None
+        failed = False
+        for who, idxs in groups:
+            if failed:
+                for i in idxs:
+                    GLib.idle_add(self.on_event, {"event": "skipped"}, i)
+                continue
+            if who == "root":
+                ok, err = self.run_root(pw, idxs)
+                if err is not None:
+                    GLib.idle_add(self.finish, "error", err)
+                    return
+                failed = not ok
+                continue
+            for i in idxs:
+                if failed:
+                    GLib.idle_add(self.on_event, {"event": "skipped"}, i)
+                    continue
+                cmd, _, _, cwd = self.req.commands[i]
+                GLib.idle_add(self.on_event, {"event": "start"}, i)
+                res = userrun.run(cmd, cwd, env)
+                GLib.idle_add(self.on_event, {"event": "done", **res}, i)
+                failed = res["exit_code"] != 0
+        del pw
+        GLib.idle_add(self.finish, "completed", "Ran the approved commands.")
+
+    def run_root(self, pw, idxs):
+        """(all succeeded, error message if the runner itself broke)"""
+        payload = {"id": self.req.id, "requester": self.req.requester,
+                   "commands": [self.req.commands[i][0] for i in idxs],
+                   "stop_on_failure": True, "timeout": 1800}
+        ok, finished = True, False
         try:
             p = subprocess.Popen([SUDO, "-S", "-k", "-p", "", "--", "/usr/bin/python3", "-I", RUNNER],
                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             p.stdin.write((pw + "\n" + json.dumps(payload) + "\n").encode())
             p.stdin.close()
-            del pw
             for line in p.stdout:
                 try:
                     ev = json.loads(line)
                 except ValueError:
                     continue
-                GLib.idle_add(self.on_event, ev, chosen)
+                if ev.get("event") == "finished":
+                    finished = True
+                elif ev.get("event") in ("start", "done", "skipped"):
+                    if ev.get("event") == "done" and ev.get("exit_code") != 0:
+                        ok = False
+                    GLib.idle_add(self.on_event, ev, idxs[ev["index"]])
             p.wait()
             err = p.stderr.read().decode("utf-8", "replace").strip()
-            GLib.idle_add(self.on_runner_exit, p.returncode, err)
         except OSError as e:
-            GLib.idle_add(self.on_runner_exit, -1, str(e))
+            return False, f"The root runner couldn't start: {e}"
+        if not finished:
+            # The runner died before "finished" (sudo refused, python error...)
+            return False, f"The root runner exited with {p.returncode}: {err[-500:]}"
+        return ok, None
 
     def set_state(self, i, text, cls):
         lbl = self.states[i]
@@ -381,10 +505,9 @@ class ElevateWindow(Adw.ApplicationWindow):
             lbl.add_css_class(cls)
         lbl.set_label(text)
 
-    def on_event(self, ev, chosen):
+    def on_event(self, ev, i):
         kind = ev.get("event")
         if kind in ("start", "done", "skipped"):
-            i = chosen[ev["index"]]
             r = self.results[i]
             if kind == "start":
                 r["state"] = "running"
@@ -407,14 +530,6 @@ class ElevateWindow(Adw.ApplicationWindow):
                         shown = f"… {len(lines) - 12} more lines (full output goes to the agent)\n" + shown
                     self.outputs[i].set_label(shown)
                     self.outputs[i].set_visible(True)
-        elif kind == "finished":
-            self.finish("completed", "Ran the approved commands.")
-        return False
-
-    def on_runner_exit(self, code, err):
-        if not self.done:
-            # The runner died before "finished" (sudo refused, python error...)
-            self.finish("error", f"The root runner exited with {code}: {err[-500:]}")
         return False
 
     # ---- result ----------------------------------------------------------
@@ -466,8 +581,8 @@ class ElevateWindow(Adw.ApplicationWindow):
             os.makedirs(os.path.dirname(STATE_LOG), exist_ok=True)
             entry = {"time": time.time(), "id": self.req.id, "requester": self.req.requester,
                      "reason": self.req.reason, "status": result["status"],
-                     "commands": [{"cmd": r["command"], "decision": r["decision"], "state": r["state"],
-                                   "exit_code": r.get("exit_code")} for r in self.results]}
+                     "commands": [{"cmd": r["command"], "as": r["as"], "cwd": r["cwd"], "decision": r["decision"],
+                                   "state": r["state"], "exit_code": r.get("exit_code")} for r in self.results]}
             with open(STATE_LOG, "a") as f:
                 f.write(json.dumps(entry) + "\n")
         except OSError:

@@ -29,7 +29,15 @@ window.elevate {
 .elevate .section { color: @muted; font-size: 10.5px; font-weight: 700; letter-spacing: 1px; }
 .elevate .cmd-card { background-color: alpha(@text, 0.05); border: 1px solid alpha(@accent, 0.18);
   border-radius: 12px; padding: 10px 12px; }
+.elevate .cmd-card.root { border-color: alpha(@error, 0.45); }
 .elevate .cmd-card.declined { opacity: 0.5; }
+/* Who a command runs as: on every card, never only by position. */
+.elevate .mode.user { background-color: alpha(@accent, 0.15); color: @accent; }
+.elevate .badge { font-family: "JetBrainsMono Nerd Font", monospace; font-size: 11px; font-weight: 700;
+  padding: 2px 8px; border-radius: 8px; }
+.elevate .badge.root { background-color: alpha(@error, 0.18); color: @error; }
+.elevate .badge.user { background-color: alpha(@accent, 0.18); color: @accent; }
+.elevate .where { font-family: "JetBrainsMono Nerd Font", monospace; font-size: 11.5px; color: @subtext; }
 .elevate .why { color: @text; font-weight: 600; font-size: 13.5px; }
 .elevate .cmd { font-family: "JetBrainsMono Nerd Font", "JetBrains Mono", monospace; font-size: 12.5px;
   color: @code; background-color: alpha(@crust, 0.7); border-radius: 10px; padding: 7px 10px; }

@@ -1,6 +1,7 @@
 # anumati -- notes for agents
 
-Root commands for AI agents, approved by the user in a window. Its own repo,
+Commands for AI agents, as root or as the user (`"as"`), approved by the
+user in a window that marks the two apart (ADR 8). Its own repo,
 pulled into Vayu (github.com/Theyashsawarkar/vayu, whose CLAUDE.md
 "Plugins" rules apply); it must work on any Linux desktop on its own. It was
 called vayu-elevate until v1.1.0 (`/usr/local/bin/vayu-elevate` is a link).
@@ -8,7 +9,8 @@ called vayu-elevate until v1.1.0 (`/usr/local/bin/vayu-elevate` is a link).
 - `bin/anumati` (what agents call), `lib/dialog.py` (the window), `lib/remote.py`
   (answering from the phone through ekatva; the same module as pramana's,
   keep in step), `lib/runner.py`
-  (runs as root). `install.sh` installs them root-owned into `/usr/local`:
+  (runs as root), `lib/userrun.py` (runs the user's commands: allowlisted
+  environment, never the agent's). `install.sh` installs them root-owned into `/usr/local`:
   never make the installed copies user-writable or load code from the user's
   home at runtime.
 - Security first: what the window shows is exactly what runs; the agent never

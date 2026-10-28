@@ -38,6 +38,18 @@ class ParseAnswer(unittest.TestCase):
                     answer(approve=True, allow=[7], password="pw")]:  # no command in range
             self.assertIsNone(remote.parse_answer(bad, 2), bad)
 
+    def test_user_commands_need_no_password(self):
+        # commands 0 and 2 run as root, 1 as the user
+        self.assertEqual(remote.parse_answer(answer(approve=True, allow=[1]), 3, root=[0, 2]),
+                         {"approve": True, "allow": [1], "password": None})
+        # a password sent along with them is dropped, never kept
+        self.assertEqual(remote.parse_answer(answer(approve=True, allow=[1], password="pw"), 3, root=[0, 2]),
+                         {"approve": True, "allow": [1], "password": None})
+        # any root command in the answer still needs it
+        self.assertIsNone(remote.parse_answer(answer(approve=True, allow=[0, 1]), 3, root=[0, 2]))
+        self.assertEqual(remote.parse_answer(answer(approve=True, allow=[0, 1], password="pw"), 3, root=[0, 2]),
+                         {"approve": True, "allow": [0, 1], "password": "pw"})
+
     def test_path_comes_from_the_uid_not_the_environment(self):
         os.environ["XDG_RUNTIME_DIR"] = "/tmp/evil"
         self.assertEqual(remote.socket_path(1000), "/run/user/1000/ekatva-root.sock")

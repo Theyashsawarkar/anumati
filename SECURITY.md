@@ -21,6 +21,9 @@ Out of scope, as the README explains: a program already running as your
 user that is actively malicious (it could draw a lookalike window). In
 scope: anything that makes the window show one thing and run another, lets
 an agent see the password, leaves root access behind, or bypasses approval.
+That includes commands run as you (`"as": "user"`, ADR 8): anything that
+makes one run without your click, run something the window didn't show
+(through the environment, say), or pass off a ROOT command as a YOU one.
 
 ## Answering from the phone
 

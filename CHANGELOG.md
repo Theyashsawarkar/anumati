@@ -2,6 +2,35 @@
 
 Newest first. Releases are tags (`vX.Y.Z`) with `VERSION` in `bin/anumati`.
 
+## v1.4.0 -- 2026-10-28
+
+- **Commands as you, not just as root** (ADR 8). A command can say
+  `"as": "user"` (with an optional absolute `cwd`, default: home): for
+  anything an agent can't run itself, like a command its sandbox blocks.
+  It shows in the same window with a YOU badge (ROOT ones get a red badge
+  and border), numbered in run order, with "as <user>, in <folder>" under
+  it; the top bar counts each kind. YOU commands run as you from the window
+  with a click: the password is asked for only when a ROOT command is
+  ticked, and a request with only YOU commands has no password field.
+  Commands run in request order, stopping at the first failure of either
+  kind; each run of ROOT commands is one `sudo -k`. Without `"as"` a
+  command is ROOT, so 1.x requests are unchanged; `cwd` on a ROOT command
+  is refused.
+- YOU commands get an allowlisted environment from the systemd user
+  manager, not the agent's (no `BASH_ENV`, `LD_PRELOAD`, exported
+  functions; `PATH` without relative or world-writable folders), and no
+  login shell. New `lib/userrun.py` (pure Python, tested), installed next
+  to the window.
+- MCP: the tool is now `request_commands`; `request_root_commands` is still
+  listed, as the same tool. CLI: `--as user` and `--cwd` for the one-off
+  form. Results and your `requests.jsonl` carry each command's `as` and
+  `cwd`; notifications say "Approval requested" when nothing runs as root.
+- Answering from the phone: approving only YOU commands needs no password
+  (`lib/remote.py`'s `parse_answer` takes the ROOT indexes); the request
+  sent to ekatva carries `as` and `cwd`.
+- Enter on a command's checkbox runs the request (or moves to the password
+  field when it's needed and empty).
+
 ## v1.3.0 -- 2026-10-26
 
 - Answer from your phone: when [ekatva](https://github.com/Theyashsawarkar/ekatva)

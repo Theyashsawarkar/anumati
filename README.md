@@ -7,8 +7,8 @@
 </p>
 
 <p align="center">
-  <b>Let AI agents ask for root commands, and run only the ones you approve.</b><br>
-  One window: every command and why, a tick to allow it, your password once. The agent gets the results as JSON.
+  <b>Let AI agents ask for the commands they can't run themselves, as root or as you, and run only the ones you approve.</b><br>
+  One window: every command and why, marked ROOT or YOU, a tick to allow it, your password once for the root ones. The agent gets the results as JSON.
 </p>
 
 <p align="center">
@@ -16,7 +16,7 @@
   <a href="https://github.com/Theyashsawarkar/anumati/releases"><img alt="Release" src="https://img.shields.io/github/v/release/Theyashsawarkar/anumati?color=a6e3a1&label=release"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-f5e0dc"></a>
   <img alt="Linux" src="https://img.shields.io/badge/platform-linux-89b4fa">
-  <img alt="MCP" src="https://img.shields.io/badge/MCP-request__root__commands-cba6f7">
+  <img alt="MCP" src="https://img.shields.io/badge/MCP-request__commands-cba6f7">
 </p>
 
 <p align="center">
@@ -34,6 +34,12 @@ anumati replaces that: the agent sends the commands, each with a reason; a
 window shows them on your desktop; you untick what you don't want, type
 your password once, and the ticked commands run. The agent gets every
 command's output and exit code back.
+
+The same goes for commands that don't need root but that the agent can't
+run itself: its sandbox blocks the network or a folder, or you've set it to
+ask first. The agent marks those `"as": "user"`; they show in the same
+window with a **YOU** badge instead of **ROOT**, run as you with a click (no
+password), and come back the same way.
 
 ## Contents
 
@@ -55,6 +61,10 @@ command's output and exit code back.
 
 - **You see exactly what runs**: every command as it will run, under the
   agent's one-line reason for it, and a checkbox on each.
+- **Root or you, never mixed up**: every command carries a ROOT (red) or
+  YOU badge and its number in the run order; YOU commands also show the
+  user and folder they run in. The password is asked for only when a ROOT
+  command is ticked ([ADR 8](docs/adr/0008-commands-as-you.md)).
 - **One password for the batch**, typed into a window the agent didn't
   start and can't read. No sudo timestamp is left behind (`sudo -k`).
 - **Structured results**: per-command state (`ok`, `failed`, `skipped`,
@@ -62,7 +72,7 @@ command's output and exit code back.
   meaningful exit codes.
 - **Two ways in**: JSON on stdin (or `--cmd`/`--why` pairs) for anything
   that runs shell commands, and an MCP server (`--mcp`) with one tool,
-  `request_root_commands`.
+  `request_commands` (also under its old name, `request_root_commands`).
 - **Refuses tricks**: requests with control characters or invisible
   Unicode (bidi overrides, zero-width) are rejected, so what you read is
   what runs; every command needs a reason; at most 50 per request.
@@ -105,9 +115,12 @@ link to `anumati`, so agents and notes that still use it keep working.
 ## What you see
 
 A window opens with everything the agent asked for: each command exactly as
-it will run, its reason, and a checkbox. Untick anything you don't want,
-type your password, press **Run** (or Enter). The ticked commands run in
-order, stopping at the first failure, and each card shows its result. If
+it will run, its reason, a checkbox, and a badge saying how it runs:
+**ROOT** (as root, from `/`) or **YOU** (as you, in the folder shown under
+it). The top bar says how many of each. Untick anything you don't want,
+type your password if any ROOT command is ticked, press **Run** (or Enter).
+A request with only YOU commands has no password field. The ticked commands
+run in order, stopping at the first failure, and each card shows its result. If
 they all succeed the window closes by itself; if one fails it stays open
 with the error.
 
@@ -118,7 +131,7 @@ you have one. The theme's colours are used only if everything stays readable
 
 | Key | Action |
 |---|---|
-| `Enter (password field)` | Run the selected commands as root |
+| `Enter (password field or Run)` | Run the selected commands (as root and as you) |
 | `Space` | Toggle the focused command |
 | `Esc` | Cancel the root request (deny everything; closes the window after a run) |
 | `Enter (after a failed run)` | Close the window |
@@ -138,19 +151,32 @@ anumati <<'EOF'
   "reason": "Install Docker and start it on demand, as you asked.",
   "commands": [
     {"cmd": "pacman -S --needed --noconfirm docker", "why": "Install Docker"},
-    {"cmd": "systemctl enable --now docker.socket", "why": "Start Docker when something connects to it"}
+    {"cmd": "systemctl enable --now docker.socket", "why": "Start Docker when something connects to it"},
+    {"cmd": "docker compose up -d", "why": "Start the project's services",
+     "as": "user", "cwd": "/home/me/project"}
   ]
 }
 EOF
 ```
 
 One-off form: `anumati --requester "Claude Code" --why "Reload udev rules" --cmd "udevadm control --reload"`
-(repeat `--why`/`--cmd` pairs for more). `anumati --schema` prints the
-request and result JSON Schema.
+(repeat `--why`/`--cmd` pairs for more; add `--as user` and `--cwd DIR` to
+run them all as you). `anumati --schema` prints the request and result JSON
+Schema.
 
 Rules for the commands:
 
-- Each runs as root with `bash -c`, from `/`, with **no stdin and no tty**:
+- `"as"` says how each runs, and the user sees it on the card:
+  - `"root"` (the default, so 1.x requests work unchanged): as root, from
+    `/`. Needs the user's password. `cwd` isn't allowed.
+  - `"user"`: as the user, in `cwd` (an absolute path; default: their
+    home), approved with a click. For commands that don't need root but
+    that you can't run yourself (a sandbox, a permission rule). They run
+    outside your sandbox, from the window, with the session's environment
+    filtered to an allowlist (`HOME`, `USER`, `LANG`, `PATH` without
+    world-writable folders, the Wayland/D-Bus/SSH-agent sockets…), not
+    yours: pass anything else on the command line.
+- Each runs with `bash -c`, with **no stdin and no tty**:
   anything that prompts fails or hangs until its 30-minute limit. Use
   `pacman --noconfirm`, `apt -y`, `cp -f` and the like.
 - They run in order and stop at the first non-zero exit; the rest are
@@ -158,7 +184,7 @@ Rules for the commands:
 - Every command needs a `why`: one plain line the user decides from.
 - At most 50 commands, 8000 characters each; no control characters or
   invisible Unicode.
-- `~` is root's home here: write `/home/<user>/...` in full.
+- In a ROOT command `~` is root's home: write `/home/<user>/...` in full.
 
 Ask for exactly what's needed, explain each command honestly, don't re-send
 a denied request unless the user asks, and treat a declined command as the
@@ -174,7 +200,7 @@ user's answer.
   "declined": [],
   "results": [
     {"index": 0, "command": "pacman -S --needed --noconfirm docker", "why": "Install Docker",
-     "decision": "approved", "state": "ok", "exit_code": 0, "stdout": "...", "stderr": "",
+     "as": "root", "cwd": "/", "decision": "approved", "state": "ok", "exit_code": 0, "stdout": "...", "stderr": "",
      "duration": 14.2, "timed_out": false, "truncated": false}
   ]
 }
@@ -209,8 +235,10 @@ Output is capped at 512 KB per stream (`truncated: true` when cut).
 ## For agents: over MCP
 
 `anumati --mcp` is an MCP server (stdio) with one tool,
-`request_root_commands`, taking the same request object and returning the
-result as text and `structuredContent`.
+`request_commands`, taking the same request object and returning the
+result as text and `structuredContent`. It's also listed under its 1.x
+name, `request_root_commands` (the same tool: commands without `"as"` run
+as root), so existing setups keep working.
 
 ```sh
 claude mcp add --scope user anumati -- anumati --mcp      # Claude Code
@@ -235,10 +263,13 @@ Add a few lines to the agent's global instructions (Claude Code:
 `~/.gemini/GEMINI.md`):
 
 ```markdown
-- Commands that need root: don't ask me to paste sudo commands. Send them to
-  `anumati` (JSON on stdin: requester, reason, commands: [{cmd, why}];
-  see `anumati --help`). I approve them in a window; you get the results.
-  Respect declined commands; never retry a denied request unasked.
+- Commands you can't run yourself: don't ask me to paste them into a
+  terminal. Send them to `anumati` (JSON on stdin: requester, reason,
+  commands: [{cmd, why, as, cwd}]; see `anumati --help`): `"as": "root"`
+  for anything that needs root, `"as": "user"` (with `cwd`) for the rest,
+  like a command your sandbox blocks. I approve them in a window; you get
+  the results. Respect declined commands; never retry a denied request
+  unasked.
 ```
 
 ## What's recorded
@@ -246,7 +277,8 @@ Add a few lines to the agent's global instructions (Claude Code:
 Every command that ran as root, with its exit code, goes to
 `/var/log/anumati.log`: root-only, so the agent can't edit it. Every
 request, denied ones included, goes to your own
-`~/.local/state/anumati/requests.jsonl`.
+`~/.local/state/anumati/requests.jsonl`, with each command's `as` and
+`cwd` (YOU commands are only in this one).
 
 ```sh
 sudo tail -n 20 /var/log/anumati.log | jq .
@@ -256,13 +288,15 @@ tail -n 5 ~/.local/state/anumati/requests.jsonl | jq .
 ## Security
 
 anumati is a **consent gate**: nothing runs as root unless you see it and
-type your password.
+type your password, and nothing runs as you unless you see it and press Run.
 
 | Guarantee | How |
 |---|---|
 | The agent never sees your password | It's typed into the approval window: a separate process the agent didn't start (a transient systemd user service, with a clean environment) and can't inspect (`PR_SET_DUMPABLE=0`). |
 | What runs is what you saw | The window and the root-side runner are root-owned files; the window holds the request in memory once shown; Python runs isolated (`-I`); your GTK styling can't hide part of it (the window uses root-owned XDG dirs); the theme's colours are read as plain `#rrggbb` only and used only while every text stays readable, else anumati's own ([ADR 6](docs/adr/0006-themed-but-never-hidden.md)); invisible or direction-changing characters are refused. |
 | No leftover access | sudo runs with `-k` both times: no cached credentials for anything else. |
+| ROOT and YOU can't be confused | Each card says which, in its own colour, with its number in the run order; YOU cards show the user and folder. A command without `"as"` is ROOT, never the reverse; root commands always run from `/`. |
+| A YOU command runs only what you saw | It runs from the window, not the agent, with `bash -c` (no login shell, so no rc file), in an allowlisted environment taken from the session's systemd user manager, not the agent: no `BASH_ENV`, `LD_PRELOAD` or exported functions, and a `PATH` without relative or world-writable folders ([ADR 8](docs/adr/0008-commands-as-you.md)). |
 | Answering from the phone changes none of this | The phone's answer, through ekatva's end-to-end encrypted link, ticks the commands visibly and fills the password field; then the same check and runner. The window sends nothing secret out, and finds ekatva by your uid, not the agent's environment ([ADR 7](docs/adr/0007-answer-from-the-phone.md)). |
 
 What it **can't** do: protect you from a program that is actively malicious
@@ -281,12 +315,16 @@ read each command before you approve it. Report security problems privately:
    a transient service, not a child of the agent.
 2. The window (`lib/dialog.py`, GTK 4 / libadwaita) reads the request once
    into memory and shows it. You untick, type your password, press Run.
-3. It checks the password with `sudo -S -k true`, then starts
-   `sudo -S -k -- python3 -I runner.py`, writing the password and the
-   approved commands to its stdin. Nothing is written to disk.
+3. If a ROOT command is ticked, it checks the password with
+   `sudo -S -k true`. Then it goes through the ticked commands in order:
+   each run of consecutive ROOT commands goes to
+   `sudo -S -k -- python3 -I runner.py`, with the password and those
+   commands on its stdin (nothing is written to disk); each YOU command
+   runs in the window's own process (`lib/userrun.py`).
 4. The runner (`lib/runner.py`) runs each command with `bash -c` from `/`,
-   no stdin, a minimal environment, 30 minutes max each, stopping at the
-   first failure, and appends each to `/var/log/anumati.log`.
+   no stdin, a minimal environment, 30 minutes max each, and appends each
+   to `/var/log/anumati.log`. YOU commands get the same limits. The first
+   failure, either kind, skips the rest.
 5. The window writes `result.json`; `anumati` prints it and exits.
 
 ## Troubleshooting

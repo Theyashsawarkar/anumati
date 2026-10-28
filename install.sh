@@ -13,6 +13,7 @@
 #   /usr/local/lib/anumati/theme.py        its look and the theme readability check
 #   /usr/local/lib/anumati/remote.py       answering from the phone, through ekatva
 #   /usr/local/lib/anumati/runner.py       runs the approved commands as root
+#   /usr/local/lib/anumati/userrun.py      runs the approved commands as you
 #   /usr/local/lib/anumati/{config,data}/  empty XDG dirs for the window, so
 #                                          your GTK CSS can't restyle it
 #   /usr/local/bin/vayu-elevate            -> anumati (its old name, kept working)
@@ -51,6 +52,7 @@ files=(
   "lib/theme.py:$lib/theme.py"
   "lib/remote.py:$lib/remote.py"
   "lib/runner.py:$lib/runner.py"
+  "lib/userrun.py:$lib/userrun.py"
 )
 for pair in "${files[@]}"; do
   src=$here/${pair%%:*} dst=${pair#*:}

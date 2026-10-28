@@ -1,11 +1,17 @@
 #!/usr/bin/python3 -I
-"""anumati (अनुमति, "permission"): run commands as root with the user's approval. For AI agents.
+"""anumati (अनुमति, "permission"): run commands with the user's approval. For AI agents.
 
 Instead of asking the user to copy sudo commands into a terminal, an agent
 sends the commands and the reason for each. An approval window shows them on
-the desktop; the user ticks the ones to allow and types their password once;
-the ticked commands run as root; the agent gets every command's output and
-exit code back as JSON. Nothing runs without the user's password.
+the desktop; the user ticks the ones to allow (and types their password once
+if any runs as root); the ticked commands run; the agent gets every
+command's output and exit code back as JSON.
+
+Each command says how it runs, and the window marks the two apart:
+  "as": "root"   (the default) as root, from /; needs the user's password
+  "as": "user"   as the user, outside the agent's sandbox, in "cwd" (an
+                 absolute path; default: home); approved with a click.
+                 For anything the agent can't run itself.
 
 Usage (any agent that can run a shell command):
 
@@ -14,11 +20,14 @@ Usage (any agent that can run a shell command):
      "reason": "Install and start the Docker daemon you asked for.",
      "commands": [
        {"cmd": "pacman -S --needed --noconfirm docker", "why": "Install Docker"},
-       {"cmd": "systemctl enable --now docker.socket", "why": "Start it on demand"}
+       {"cmd": "systemctl enable --now docker.socket", "why": "Start it on demand"},
+       {"cmd": "docker compose up -d", "why": "Start the project's services",
+        "as": "user", "cwd": "/home/me/project"}
      ]}
     EOF
 
     anumati --why "Reload udev rules" --cmd "udevadm control --reload"   # one-off form
+    anumati --as user --cwd ~/project --why "Push the branch" --cmd "git push"
     anumati --schema     # request/result format (JSON Schema)
     anumati --mcp        # MCP server on stdio (tool: request_root_commands)
 
@@ -26,8 +35,9 @@ Exit codes: 0 every command approved and succeeded; 1 an approved command
 failed; 3 nothing ran (denied, timed out, wrong password); 4 some commands
 were declined, the approved ones succeeded; 2 bad request or tool error.
 
-Commands run with `bash -c`, from /, as root, with no stdin and no tty: use
-non-interactive flags (pacman --noconfirm, apt -y). The user can decline any
+Commands run with `bash -c`, with no stdin and no tty, in request order,
+stopping at the first failure: use non-interactive flags (pacman
+--noconfirm, apt -y). The user can decline any
 of them, so check "results" for each command's "state". Docs:
 https://github.com/Theyashsawarkar/anumati
 """
@@ -44,9 +54,10 @@ import uuid
 
 DIALOG = "/usr/local/lib/anumati/dialog.py"
 LIB = "/usr/local/lib/anumati"
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
-MAX_COMMANDS, MAX_CMD, MAX_WHY, MAX_REASON, MAX_REQUESTER = 50, 8000, 500, 2000, 80
+MAX_COMMANDS, MAX_CMD, MAX_WHY, MAX_REASON, MAX_REQUESTER, MAX_CWD = 50, 8000, 500, 2000, 80, 1024
+AS = ("root", "user")
 # Characters that can make displayed text differ from what runs: C0/C1
 # controls (except tab/newline), bidi overrides and isolates, zero-width.
 HIDDEN = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f​-‏‪-‮⁠-⁩﻿]")
@@ -64,9 +75,15 @@ SCHEMA = {
                 "type": "object", "required": ["cmd", "why"],
                 "properties": {
                     "cmd": {"type": "string", "maxLength": MAX_CMD,
-                            "description": "Run as root with bash -c, from /, no stdin."},
+                            "description": "Run with bash -c, no stdin."},
                     "why": {"type": "string", "maxLength": MAX_WHY,
-                            "description": "What this command does and why, one line."}}}},
+                            "description": "What this command does and why, one line."},
+                    "as": {"enum": list(AS), "default": "root",
+                           "description": "'root' (from /, needs the user's password) or 'user' (as the "
+                                          "user, outside your sandbox, approved with a click)."},
+                    "cwd": {"type": "string", "maxLength": MAX_CWD,
+                            "description": "With as 'user' only: the absolute directory to run in "
+                                           "(default: the user's home). Root commands always run from /."}}}},
         },
     },
     "result": {
@@ -78,6 +95,7 @@ SCHEMA = {
             "declined": {"type": "array", "items": {"type": "integer"}},
             "results": {"type": "array", "items": {"type": "object", "properties": {
                 "index": {"type": "integer"}, "command": {"type": "string"}, "why": {"type": "string"},
+                "as": {"enum": list(AS)}, "cwd": {"type": "string"},
                 "decision": {"enum": ["approved", "declined"]},
                 "state": {"enum": ["ok", "failed", "skipped", "declined", "not_run"]},
                 "exit_code": {"type": "integer"}, "stdout": {"type": "string"},
@@ -111,7 +129,20 @@ def validate(req):
         for field in ("cmd", "why"):
             if HIDDEN.search(c[field]):
                 raise BadRequest(f"commands[{i}].{field} contains control or invisible characters")
-        clean.append({"cmd": c["cmd"], "why": c["why"].strip()})
+        who = c.get("as", "root")
+        if who not in AS:
+            raise BadRequest(f"commands[{i}].as must be 'root' or 'user'")
+        item = {"cmd": c["cmd"], "why": c["why"].strip(), "as": who}
+        cwd = c.get("cwd")
+        if cwd is not None:
+            if who == "root":
+                raise BadRequest(f"commands[{i}]: root commands always run from /, drop 'cwd'")
+            if not isinstance(cwd, str) or not cwd.startswith("/") or len(cwd) > MAX_CWD:
+                raise BadRequest(f"commands[{i}].cwd must be an absolute path")
+            if HIDDEN.search(cwd):
+                raise BadRequest(f"commands[{i}].cwd contains control or invisible characters")
+            item["cwd"] = os.path.normpath(cwd)
+        clean.append(item)
     out = {"commands": clean}
     for field, limit in (("requester", MAX_REQUESTER), ("reason", MAX_REASON)):
         v = req.get(field, "")
@@ -167,10 +198,10 @@ def request(req):
     if p.returncode != 0:
         raise BadRequest(f"couldn't start the approval window: {p.stderr.strip()}")
     if shutil.which("notify-send"):
-        n = len(req["commands"])
         subprocess.run(["notify-send", "-a", "anumati", "-u", "critical", "-i", "security-high",
-                        "Root access requested",
-                        f"{req.get('requester') or 'An AI agent'} wants to run {n} command{'s' * (n != 1)} as root."],
+                        "Root access requested" if any(c["as"] == "root" for c in req["commands"])
+                        else "Approval requested",
+                        f"{req.get('requester') or 'An AI agent'} wants to run {summary(req['commands'])}."],
                        capture_output=True)
     # The window enforces the 10-minute expiry itself (it writes a
     # "timeout" result), so wait for a result or for the window to exit.
@@ -191,6 +222,15 @@ def request(req):
         shutil.rmtree(rdir, ignore_errors=True)
 
 
+def summary(commands):
+    """'2 commands as root and 1 as you' (the window says the same)."""
+    root = sum(c["as"] == "root" for c in commands)
+    user = len(commands) - root
+    first = root or user
+    text = f"{first} command{'s' * (first != 1)} as {'root' if root else 'you'}"
+    return text + (f" and {user} as you" if root and user else "")
+
+
 def exit_code(result):
     st = result.get("status")
     if st != "completed":
@@ -205,17 +245,23 @@ def exit_code(result):
 
 # ---------------------------------------------------------------- MCP ----
 MCP_TOOL = {
-    "name": "request_root_commands",
-    "title": "Run commands as root (with the user's approval)",
+    "name": "request_commands",
+    "title": "Run commands as root or as the user (with the user's approval)",
     "description": (
-        "Ask the user to approve shell commands that need root. An approval window shows every command "
-        "with your 'why'; the user ticks which to allow and enters their password once; the approved ones "
-        "run as root with bash -c, from /, with no stdin (use non-interactive flags like --noconfirm), "
-        "stopping at the first failure. Returns each command's decision, state, exit code and output. "
-        "Blocks until the user answers (up to 10 minutes). The user may decline some or all commands: "
-        "check each result's 'state'. Never use this to work around a refusal."),
+        "Ask the user to approve shell commands you can't run yourself. Each command has 'as': 'root' "
+        "(the default; runs as root from /, needs the user's password) or 'user' (runs as the user, "
+        "outside your sandbox, in 'cwd', default home; approved with a click, no password). An approval "
+        "window shows every command with your 'why', marked root or user; the user ticks which to allow. "
+        "The approved ones run in order with bash -c and no stdin (use non-interactive flags like "
+        "--noconfirm), stopping at the first failure. Returns each command's decision, state, exit code "
+        "and output. Blocks until the user answers (up to 10 minutes). The user may decline some or all "
+        "commands: check each result's 'state'. Never use this to work around a refusal or a permission "
+        "rule the user set."),
     "inputSchema": SCHEMA["request"],
 }
+# The 1.x name, kept so existing setups work: the same tool.
+MCP_TOOLS = [MCP_TOOL, {**MCP_TOOL, "name": "request_root_commands",
+                        "title": "Run commands as root (old name of request_commands)"}]
 
 
 def mcp_serve():
@@ -254,15 +300,16 @@ def mcp_serve():
                 "protocolVersion": client,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": "anumati", "version": VERSION},
-                "instructions": "Use request_root_commands for anything that needs root on this "
-                                "machine, instead of asking the user to paste sudo commands."}})
+                "instructions": "Use request_commands for anything that needs root on this machine "
+                                "(as 'root'), or that you can't run yourself (as 'user'), instead of "
+                                "asking the user to paste commands into a terminal."}})
         elif method == "ping":
             send({"jsonrpc": "2.0", "id": msg_id, "result": {}})
         elif method == "tools/list":
-            send({"jsonrpc": "2.0", "id": msg_id, "result": {"tools": [MCP_TOOL]}})
+            send({"jsonrpc": "2.0", "id": msg_id, "result": {"tools": MCP_TOOLS}})
         elif method == "tools/call":
             params = msg.get("params") or {}
-            if params.get("name") != MCP_TOOL["name"]:
+            if params.get("name") not in {t["name"] for t in MCP_TOOLS}:
                 send({"jsonrpc": "2.0", "id": msg_id,
                       "error": {"code": -32602, "message": f"unknown tool {params.get('name')!r}"}})
                 continue
@@ -279,6 +326,9 @@ def main():
     ap.add_argument("--cmd", action="append", default=[], help="a command (pair each with --why)")
     ap.add_argument("--why", action="append", default=[], help="why the matching --cmd is needed")
     ap.add_argument("--reason", default="", help="overall reason (with --cmd)")
+    ap.add_argument("--as", dest="as_", choices=AS, default="root",
+                    help="with --cmd: run them as root (default) or as the user")
+    ap.add_argument("--cwd", help="with --cmd --as user: the directory to run in (default: home)")
     ap.add_argument("--requester", default=None, help="who is asking (shown to the user)")
     ap.add_argument("--schema", action="store_true", help="print the request/result JSON Schema")
     ap.add_argument("--mcp", action="store_true", help="serve MCP on stdio")
@@ -293,7 +343,10 @@ def main():
         if a.cmd:
             if len(a.cmd) != len(a.why):
                 raise BadRequest("give one --why for every --cmd")
-            raw = {"reason": a.reason, "commands": [{"cmd": c, "why": w} for c, w in zip(a.cmd, a.why)]}
+            extra = {"as": a.as_}
+            if a.cwd is not None:
+                extra["cwd"] = os.path.abspath(a.cwd)
+            raw = {"reason": a.reason, "commands": [{"cmd": c, "why": w, **extra} for c, w in zip(a.cmd, a.why)]}
         else:
             if not a.file and sys.stdin.isatty():
                 ap.print_help()

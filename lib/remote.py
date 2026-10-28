@@ -23,10 +23,14 @@ def socket_path(uid=None):
     return f"/run/user/{os.getuid() if uid is None else uid}/ekatva-root.sock"
 
 
-def parse_answer(line, n_commands):
+def parse_answer(line, n_commands, root=None):
     """A validated answer, or None for anything malformed.
 
     {"approve": bool, "allow": [indexes], "password": str|None}
+
+    `root`: the indexes of the commands that need the password (anumati's
+    "as": "root"; None means all of them). Approving only the others needs
+    no password, and any password sent with them is dropped.
     """
     try:
         msg = json.loads(line)
@@ -40,10 +44,12 @@ def parse_answer(line, n_commands):
     allow = sorted({i for i in allow if 0 <= i < n_commands})
     if not msg["approve"]:
         return {"approve": False, "allow": [], "password": None}
+    if not allow:
+        return None
+    if root is not None and not set(allow) & set(root):
+        return {"approve": True, "allow": allow, "password": None}
     pw = msg.get("password")
     if not isinstance(pw, str) or not pw or len(pw) > MAX_PASSWORD or "\n" in pw or "\0" in pw:
-        return None
-    if not allow:
         return None
     return {"approve": True, "allow": allow, "password": pw}
 
@@ -60,9 +66,10 @@ class Remote:
         return self.sock is not None
 
     @classmethod
-    def start(cls, request, on_answer, path=None):
+    def start(cls, request, on_answer, path=None, root=None):
         """Connects and sends the request; `on_answer(answer)` is called from
-        a background thread for each valid answer. Never raises."""
+        a background thread for each valid answer (`root`: see
+        parse_answer). Never raises."""
         try:
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.settimeout(2)
@@ -73,10 +80,10 @@ class Remote:
         r = cls(s)
         r.send({"t": "request", "v": 1, **request})
         n = len(request.get("commands") or []) or 1
-        threading.Thread(target=r._read, args=(on_answer, n), daemon=True).start()
+        threading.Thread(target=r._read, args=(on_answer, n, root), daemon=True).start()
         return r
 
-    def _read(self, on_answer, n):
+    def _read(self, on_answer, n, root=None):
         buf = b""
         try:
             while True:
@@ -88,7 +95,7 @@ class Remote:
                     return self.close()
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
-                    answer = parse_answer(line.decode("utf-8", "replace"), n)
+                    answer = parse_answer(line.decode("utf-8", "replace"), n, root)
                     if answer:
                         on_answer(answer)
         except (OSError, AttributeError):
